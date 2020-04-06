@@ -1,8 +1,7 @@
 from ptilopsis import Ptilopsis
+from ptilopsis.string import parse, compile
 from devtools import debug
 
-splited = Ptilopsis.signature_spliter("test <xxx:sss,fa> [xx:ss]")
-data = Ptilopsis.signature_sorter("test <xxx:sss,fa> [xx:ss]")
-print(Ptilopsis.union_handle("test <xxx:sss,fa> [xx:ss]", 9))
-print(splited)
-debug(data)
+string = "test <xxx:int> [xx:ss]"
+will_to_parse = "test 123 ar$wq34"
+debug(compile(string).parse(will_to_parse))
