@@ -10,6 +10,7 @@ from .entities import (
     Normal, Require, Optional
 )
 from collections import Counter
+from functools import lru_cache
 from typing import List
 
 # 这些规则都是互斥的, 并且是由转译层完成, 属于高级设定
@@ -23,11 +24,12 @@ def string_as_string(string):
   return f"\\{string}"
 
 def signature_spliter(signature_string: str):
-  return re.split("([<>\[\]\:\,])", signature_string)[:-1] # 最后一个元素是空的, 推断为 "$"(正则表达式中用于表示字符串结尾)
+  return re.split(r"((?!\\)[<>\[\]\:\,])", signature_string)[:-1] # 最后一个元素是空的, 推断为 "$"(正则表达式中用于表示字符串结尾)
 
 def signature_split_whole(signature_string: str):
-  return re.split(r"([<\[].*?[>\]])", signature_string)[:-1]
+  return re.split(r"((?!\\)[<\[].*?[>\]])", signature_string)
 
+@lru_cache()
 def signature_parser(signature_string: str):
   splited: List[str] = signature_spliter(signature_string)
   
@@ -38,7 +40,7 @@ def signature_parser(signature_string: str):
   stats = "normal"
   for index, string in enumerate(splited):
     string = string.strip()
-    if all([
+    if (index - 1 >= 0 and splited[index-1] and splited[index-1][-1] == "\\") or all([
       stats == "normal",
       string not in ("<", ">", "[", "]", ":"),
       stats not in [
@@ -49,6 +51,8 @@ def signature_parser(signature_string: str):
         "optional:wait-flags"
       ]
     ]):
+      if (index - 1 >= 0 and splited[index-1] and splited[index-1][-1] == "\\"):
+        splited[index - 1] = splited[index - 1][:-1]
       normal.append(index)
     elif stats == "normal" and string == "<":
       stats = "require"
@@ -130,6 +134,7 @@ def signature_parser(signature_string: str):
       print(splited)
       raise StatsTransferError(f"cannot transfer from '{stats}' with '{string}', it happened in {index}")
   return {
+    "splited": splited,
     "normal": normal,
     "require": require,
     "optional": optional,
@@ -140,7 +145,6 @@ def union_handle(signature_string: str, index: int) -> int:
   "处理 splited 和 whole 关系, 给出 splited 中的 index, 返回 whole 中的 index."
   splited = signature_spliter(signature_string)
   whole = signature_split_whole(signature_string)
-  #print(splited, whole)
   current_string = ''
   current_start = 0
   current_whole_index = 0
@@ -156,13 +160,23 @@ def union_handle(signature_string: str, index: int) -> int:
     if index in value:
       return l_index
 
+@lru_cache()
 def signature_sorter(signature_string: str):
-  splited = signature_spliter(signature_string)
   result = signature_parser(signature_string)
+  splited = result['splited']
   whole = signature_split_whole(signature_string)
   indexer = functools.partial(union_handle, signature_string)
+  
+  # 因为推导式没法满足需求了...
+  normal = {}
+  for i in result['normal']:
+    index = indexer(i)
+    if index not in normal:
+      normal[index] = splited[i]
+    else:
+      normal[index] += splited[i]
   return {
-    "normal": {indexer(i): splited[i] for i in result['normal']},
+    "normal": normal,
     "require": {indexer(i): splited[i] for i in result['require']},
     "optional": {indexer(i): splited[i] for i in result['optional']},
     "flags": {splited[k].strip(): [splited[i].strip() for i in v] for k, v in result['flags'].items()}
@@ -186,7 +200,7 @@ def special_rule_regex_generate(in_result: List):
   result_regex = ""
   continue_stats = False
   for index, value in enumerate(in_result):
-    if isinstance(value, (Require, Optional)) and "LongParams" in value.flags: # 包容万物.
+    if isinstance(value, (Require, Optional)) and value.flags and "LongParams" in value.flags: # 包容万物.
       if index - 1 >= 0:
         last_component = in_result[index - 1]
         if type(last_component) == Normal:
@@ -198,8 +212,8 @@ def special_rule_regex_generate(in_result: List):
       continue
     if index + 1 <= length - 1:
       next_component = in_result[index + 1]
-      if type(value) == Normal and type(next_component) == Optional:
-        if "LongParams" in next_component.flags:
+      if type(value) == Normal and type(next_component) == Optional and index != 0:
+        if next_component.flags and "LongParams" in next_component.flags:
           continue
         result_regex += f"(({value.regex_generater()})?{next_component.regex_generater()})"
         continue_stats = True
