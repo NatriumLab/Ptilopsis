@@ -12,12 +12,17 @@ from .entities import (
 from collections import Counter
 from functools import lru_cache
 from typing import List
+from mirai.misc import raiser
 
 # 这些规则都是互斥的, 并且是由转译层完成, 属于高级设定
-default_handlers = {
+default_unique_handlers = {
   "int": lambda x: int(x),
   "float": lambda x: float(x),
-  "LongParams": lambda x: x.split(" ")
+  "LongParams": lambda x: x.split(" "),
+  "bool": lambda x: \
+    True if x == "true" else \
+    False if x == "false" else \
+      raiser(ValueError(f"cannot parse this string as a vaild bool: {x}"))
 }
 
 def string_as_string(string):
@@ -212,7 +217,24 @@ def special_rule_regex_generate(in_result: List):
       continue
     if index + 1 <= length - 1:
       next_component = in_result[index + 1]
-      if type(value) == Normal and type(next_component) == Optional and index != 0:
+      if all([
+          type(value) == Normal,
+          type(next_component) == Optional,
+          index != 0
+      ]):
+        if not all([
+          value.match.startswith("`"),
+          value.match.endswith("`") and \
+            not value.match.endswith("\\`")
+        ]):
+          # 判断当前 Normal 是否使用了可选断言语法 "`".
+          # 将该部分的 Normal 设置为 "Optional[Normal]", 防止出现一些蛋疼的问题:
+
+          # "--ad [ad:bool]" 必须要加上 "--ad" 之类的, 
+          # 这玩意不处理 suffix(后缀),
+          # 因为不可能会有后缀(被前面的匹配到了)
+          result_regex += re.escape(value.match[1:-1])
+          continue
         if next_component.flags and "LongParams" in next_component.flags:
           continue
         result_regex += f"(({value.regex_generater()})?{next_component.regex_generater()})"
@@ -230,7 +252,7 @@ def find_flags(generater_list, name):
         return i.flags
 
 def flags_find_handler(flags, extra_format={}):
-  fused = {**default_handlers, **extra_format}
+  fused = {**default_unique_handlers, **extra_format}
   checker_conflict = [i for i in flags if i in fused]
   if len(checker_conflict) > 1:
     # 要找出是哪几个冲突.
@@ -248,7 +270,7 @@ def parse(signature, string, extra_format={}, strict=False):
 
   regex_result = re.match(final_regex, string)
   if regex_result:
-    original: dict = regex_result.groupdict()
+    original: dict = {k: v for k, v in regex_result.groupdict().items() if v != ""}
     result = {}
     for name, value in original.items():
       flags = find_flags(regex_generater_list, name)
@@ -256,7 +278,7 @@ def parse(signature, string, extra_format={}, strict=False):
         handler_sign = flags_find_handler(flags, extra_format)
         if handler_sign:
           try:
-            result[name] = {**default_handlers, **extra_format}[handler_sign](value)
+            result[name] = {**default_unique_handlers, **extra_format}[handler_sign](value)
           except Exception as e:
             if strict:
               raise ArgumentParseError("wrong format", name, flags, handler_sign) from e

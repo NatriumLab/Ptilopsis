@@ -19,6 +19,7 @@ class Ptilopsis(object):
 
   "请使用控制台输入指令以继续操作."
   """
+  # TODO: ParametersChecker for Ptilopsis Command.
   application: Mirai
   listen_events: List[str]
 
