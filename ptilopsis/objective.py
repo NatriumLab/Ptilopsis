@@ -1,9 +1,16 @@
-from .string import signature_sorter, signature_result_list_generate, Signature
-from mirai import MessageChain, Plain
-from .entities import Normal, Require, Optional
-from typing import List
-import re
 import random
+import re
+import string as const_string
+from typing import List
+from typing import Optional as Optional_Typing
+
+from devtools import debug
+from mirai import MessageChain, Plain
+
+from .entities import Normal, Optional, Require
+from .string import (Signature, signature_result_list_generate,
+                     signature_sorter, special_rule_regex_generate)
+from mirai.misc import printer
 
 def fix_merge(chain: MessageChain):
   stats = None
@@ -28,10 +35,10 @@ def fix_merge(chain: MessageChain):
   else:
     if not result or result[-1] != temp_plain:
       result.append(temp_plain)
-  return result
+  return MessageChain(__root__=result)
 
 def chain_split(chain: MessageChain, split_str: str) -> List[MessageChain]:
-  chain = fix_merge(chain)
+  chain = fix_merge(chain) # 已经重新生成了一个 MessageChain(以list的形式)
   length = len(chain)
 
   result = []
@@ -57,41 +64,126 @@ def chain_split(chain: MessageChain, split_str: str) -> List[MessageChain]:
       ]))
   return result
 
-def chain_match(signature: Signature, chain: MessageChain) -> dict:
-  signature_array = signature_result_list_generate(
-    signature_sorter(signature.signature))
-
+def chain_headpop(chain: MessageChain, pop_with: str) -> MessageChain:
   if not chain:
     return
-  chain.__root__ = fix_merge(chain.__root__) # 合并相邻的 Plain 项
+  else:
+    if not chain.__root__:
+      return
+    chain = fix_merge(chain)
+  
+  length = len(chain)
+  pop_with_length = len(pop_with)
+  if length >= 1:
+    if isinstance(chain[0], Plain):
+      if len(chain[0].text) >= pop_with_length and \
+         chain[0].text.startswith(pop_with):
+        chain[0].text = chain[0].text[pop_with_length:]
+        return chain
 
-  current_start = 0
-  current_end = 1
-  for index, part in enumerate(signature_array):
-    slice_result = chain.__root__[index:index+1]
-    if isinstance(part, Normal):
-      part: Normal
-      if not slice_result: # 不匹配 Normal 就退出.
-        return
-      if all([isinstance(i, Plain) for i in slice_result]): # 判断是否全部都是 Plain
-        match_result = re.match(
-          f"^{part.regex_generater()}$",
-          "".join([i.toString() for i in slice_result])
-        ) # 这种情况就直接判断后者是 Require 还是 Optional 就好了
-        if not match_result: # 啊, 或许我们需要改变一下.
-          # TODO: Mixined MessageChain create as a parameter
-          if index + 1 <= len(signature_array) - 1:
-            pass
-        else:
-          # TODO: 已匹配到的 Normal, 判断之后的是 Require 还是 Optional, 如果是 Optional
-          #       那么就根据当前 index 判断当前处理的 Normal 是否需要 Optional.
-          pass
-      else:
-        break
+def chain_startswith(chain: MessageChain, with_: str) -> bool:
+  if not chain:
+    return
+  else:
+    if not chain.__root__:
+      return
+    chain = fix_merge(chain)
+  
+  length = len(chain)
+  with_length = len(with_)
+  if length >= 1:
+    if isinstance(chain[0], Plain):
+      if len(chain[0].text) >= with_length and \
+         chain[0].text.startswith(with_):
+        return True
+  return False
+
+def chain_contains(chain: MessageChain, string: str) -> bool:
+  for component in chain:
+    if isinstance(component, Plain):
+      if string in Plain.text:
+        return True
+  else:
+    return False
+
+def chain_index(chain: MessageChain, string: str) -> int:
+  for index, component in enumerate(chain):
+    if isinstance(component, Plain):
+      if string in Plain.text:
+        return index
+  else:
+    raise ValueError(f"{string} is not in chain.")
+
+
+def chain_match(signature: Signature, chain: MessageChain) -> Optional_Typing[dict]:
+  if not chain:
+    return
+
+  signature.check() # 防止NT行为.
+
+  # 想了想, 还是用 regex 进行匹配, 但是这种方法及其脆弱, 我得想办法加强.
+  #closure_sign = random.choice("`:;'<?.=") # 内容将由这些字符中的一个替换.(我还在思考该如何避免用户直接输入这些字符然后触发错误)
+  closure_sign = "<"
+  #replace_sign = random.choice("%^&*(]")
+  replace_sign = "*"
+  special_dict = {}
+  def special_save(value) -> str:
+    key = "".join(random.choices(const_string.ascii_lowercase + const_string.digits, k=7))
+    special_dict[key] = value
+    return key
+
+  def special_handle_for_raw_string(raw_str) -> str:
+    can_replace_able = \
+      re.findall(
+        f"(?<={re.escape(closure_sign)})([a-z0-9]*)(?={re.escape(closure_sign)})",
+        raw_str
+      )
+    plains = [i for i in re.split(
+      f"{re.escape(closure_sign)}[a-z0-9]*?{re.escape(closure_sign)}",
+      raw_str
+    ) if i]
+    
+    return [
+      (Plain(
+        unbound_str\
+          .replace(f"\\{replace_sign}", closure_sign)
+          .replace(f"\\{closure_sign}", replace_sign)
+      ) if way == "plain" else
+        special_dict[unbound_str]
+      )\
+      for index, unbound_str, way in sorted([
+        *[(raw_str.index(i), i, "special") for i in can_replace_able if i],
+        *[(raw_str.index(i), i, "plain") for i in plains]
+      ], key=lambda x: x[0])
+    ]
+
+  translated_string = "".join([
+    # 先将原有的, 与 closure_sign 使用相同的字符附上转义, 然后把 closure_sign 转为 replace_sign.
+    # 返回来就要把之前转义的 closure_sign 的转义去除, 使其成为字面量一致.
+    re.sub(
+      f"(?!\\\\){closure_sign}", replace_sign,
+      component.text\
+        .replace(closure_sign, f"\\{re.escape(closure_sign)}")
+        .replace(replace_sign, f"\\{re.escape(replace_sign)}") # 把原有的加上转义
+    )\
+    if isinstance(component, Plain)\
+      else f"{closure_sign}{special_save(component)}{closure_sign}" \
+    for component in chain
+  ])
+  matched_result = signature.parse(translated_string)
+  if matched_result:
+    return {
+      k: special_handle_for_raw_string(v)
+      for k, v in matched_result.items()
+    }
 
 if __name__ == "__main__":
-  from mirai import At, AtAll
+  from mirai import At 
   from devtools import debug
-  debug(chain_split(MessageChain(__root__=[
-    Plain("1*2"), At(1), Plain("22*"), AtAll(), Plain("3*2*1")
-  ]), "2"))
+  signature = Signature("匹配魔法!<magic>,向<target>发出!")
+  debug(signature_result_list_generate(signature_sorter("匹配魔法!<magic>,向<target>发出!")))
+  print("匹配魔法!rm<*-rf/<,向543".replace("<", "\\<"))
+  chain = MessageChain(__root__=[
+    Plain("匹配魔法!rm<*-rf/<,向543"), At(123), At(1846913566), Plain("发出!")
+  ])
+  debug(chain_match(signature, chain))

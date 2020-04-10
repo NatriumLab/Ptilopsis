@@ -14,16 +14,18 @@ class CommandComponent(metaclass=ABCMeta):
 class Normal(CommandComponent):
     index: int
     match: str
+    optional: bool = False
 
-    def __init__(self, match_string, index):
+    def __init__(self, match_string, index, optional=False):
         self.match = match_string
         self.index = index
+        self.optional = optional
 
     def regex_generater(self):
         return re.escape(self.match)
 
     def __repr__(self):
-        return f"<Normal match='{self.match}'>"
+        return f"<Normal match='{self.match}' optional={self.optional}>"
 
 class Require(CommandComponent):
     name: str

@@ -13,6 +13,7 @@ from collections import Counter
 from functools import lru_cache
 from typing import List
 from mirai.misc import raiser
+from .logger import CommandLogger
 
 # 这些规则都是互斥的, 并且是由转译层完成, 属于高级设定
 default_unique_handlers = {
@@ -29,10 +30,18 @@ def string_as_string(string):
   return f"\\{string}"
 
 def signature_spliter(signature_string: str):
-  return re.split(r"((?!\\)[<>\[\]\:\,])", signature_string)[:-1] # 最后一个元素是空的, 推断为 "$"(正则表达式中用于表示字符串结尾)
+  result = re.split(r"((?!\\)[<>\[\]\:\,])", signature_string)
+  if result:
+    if result[-1] == "":
+      result.pop() # 直接去掉最后有可能丢数据, 这里还是判断一下吧
+  return result
 
 def signature_split_whole(signature_string: str):
-  return re.split(r"((?!\\)[<\[].*?[>\]])", signature_string)
+  result = re.split(r"((?!\\)[<\[].*?[>\]])", signature_string)
+  if result:
+    if result[-1] == "":
+      result.pop()
+  return result
 
 @lru_cache()
 def signature_parser(signature_string: str):
@@ -42,6 +51,7 @@ def signature_parser(signature_string: str):
   require = [] # index
   optional = []
   flags = {} # index: flags
+
   stats = "normal"
   for index, string in enumerate(splited):
     string = string.strip()
@@ -95,6 +105,8 @@ def signature_parser(signature_string: str):
       if re.match(r"^[_a-zA-Z][a-zA-Z0-9_]*$", string):
         flags.setdefault(require[-1], [])
         flags[require[-1]].append(index)
+      else:
+        raise ValueError(f"flags don't match with '{string}'")
         # 这里stats不需要改变.
     # Optional 来了.
     elif stats == "normal" and string == "[":
@@ -138,6 +150,9 @@ def signature_parser(signature_string: str):
       # 这里大多都是跳到了不该跳的地方, 要报错.
       print(splited)
       raise StatsTransferError(f"cannot transfer from '{stats}' with '{string}', it happened in {index}")
+  else:
+    if stats != "normal":
+      raise ValueError(f"stoped with a unexpected stats: '{stats}' of '{string}'")
   return {
     "splited": splited,
     "normal": normal,
@@ -192,13 +207,34 @@ def list_without(seq, *args):
 
 def signature_result_list_generate(in_result: dict):
   result = []
+
   for index, string in in_result['normal'].items():
     result.append(Normal(string, index))
   for index, param_name in in_result['require'].items():
     result.append(Require(param_name, index, in_result['flags'].get(param_name)))
   for index, optional_name in in_result['optional'].items():
     result.append(Optional(optional_name, index, in_result['flags'].get(optional_name)))
-  return sorted(result, key=lambda x: x.index)
+  
+  result = sorted(result, key=lambda x: x.index)
+  length = len(result)
+  for index, item in enumerate(result):
+    if isinstance(item, Normal):
+      if index + 1 < length:
+        next_component = result[index + 1]
+        if all([
+          item.match.startswith("`"),
+          item.match.endswith("`"),
+          len(item.match) != 1,
+          not item.match.endswith("\`"),
+        ]):
+          if isinstance(next_component, Optional):
+            item.match = item.match[1:-1]
+            item.optional = True
+          else:
+            CommandLogger.warning(
+              f"it seems that you are use '`' in a wrong place, \
+                it should be placed before an optional argument signature.: {result}")
+  return result
 
 def special_rule_regex_generate(in_result: List):
   length = len(in_result)
@@ -215,26 +251,9 @@ def special_rule_regex_generate(in_result: List):
     if continue_stats:
       continue_stats = False
       continue
-    if index + 1 <= length - 1:
+    if index + 1 < length:
       next_component = in_result[index + 1]
-      if all([
-          type(value) == Normal,
-          type(next_component) == Optional,
-          index != 0
-      ]):
-        if not all([
-          value.match.startswith("`"),
-          value.match.endswith("`") and \
-            not value.match.endswith("\\`")
-        ]):
-          # 判断当前 Normal 是否使用了可选断言语法 "`".
-          # 将该部分的 Normal 设置为 "Optional[Normal]", 防止出现一些蛋疼的问题:
-
-          # "--ad [ad:bool]" 必须要加上 "--ad" 之类的, 
-          # 这玩意不处理 suffix(后缀),
-          # 因为不可能会有后缀(被前面的匹配到了)
-          result_regex += re.escape(value.match[1:-1])
-          continue
+      if isinstance(value, Normal) and value.optional:
         if next_component.flags and "LongParams" in next_component.flags:
           continue
         result_regex += f"(({value.regex_generater()})?{next_component.regex_generater()})"
@@ -269,6 +288,7 @@ def parse(signature, string, extra_format={}, strict=False):
   final_regex = special_rule_regex_generate(regex_generater_list)
 
   regex_result = re.match(final_regex, string)
+  print(regex_result)
   if regex_result:
     original: dict = {k: v for k, v in regex_result.groupdict().items() if v != ""}
     result = {}
@@ -297,6 +317,16 @@ class Signature:
 
   def parse(self, target_string, extra_format={}, strict=False):
     return parse(self.signature, target_string, extra_format, strict)
+
+  def check(self):
+    elements = signature_result_list_generate(
+      signature_sorter(self.signature))
+    elements_length = len(elements)
+    for index, element in enumerate(elements):
+      next_element = elements[index + 1] if index + 1 < elements_length else None
+      if next_element:
+        if isinstance(element, Require) and isinstance(next_element, Require):
+          raise SyntaxError(f"an element that is a parameter cannot be adjacent to another: index=({index}, {index + 1})")
 
 def compile(signature):
   return Signature(signature)
