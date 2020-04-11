@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "fcef80594f424938bc237cd397f904ec3f8e17986a2a4b6ad7980bebe2b1b9a5"
+            "sha256": "69a44c46c02288c896766975b16a241f310277bdffda72a561e24485949b9745"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -69,10 +69,10 @@
         },
         "kuriyama": {
             "hashes": [
-                "sha256:dcc313ead99d4f3107738e1573a164737ff53a41ba19e03756b431bee277cfcf"
+                "sha256:f4e5792aacb61daa17dbc0976cc79879da609896ffd1cf9753228862b5777059"
             ],
             "index": "pypi",
-            "version": "==0.2.29"
+            "version": "==0.2.31"
         },
         "logbook": {
             "hashes": [

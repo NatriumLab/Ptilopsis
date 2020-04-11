@@ -1,9 +1,13 @@
-from ptilopsis.string import signature_sorter, signature_result_list_generate
-from ptilopsis.entities import Normal, Require, Optional
+from ptilopsis import Ptilopsis
+from mirai import Mirai
 from devtools import debug
 
-signature = "指令1 <arg1> 1[arg2]"
-sorted_data = signature_sorter(signature)
-regex_generater_list = signature_result_list_generate(sorted_data)
+app = Mirai("mirai://192.168.31.188:8070/ws?qq=208924405&authKey=213we355gdfbaerg")
+cm = Ptilopsis(app)
 
-debug(regex_generater_list)
+@cm.register("test `fa`[something]")
+async def u(something=None):
+    debug(something)
+
+if __name__ == "__main__":
+    app.run()

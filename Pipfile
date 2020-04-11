@@ -7,7 +7,7 @@ verify_ssl = true
 devtools = "*"
 
 [packages]
-kuriyama = "*"
+kuriyama = ">=0.2.31"
 
 [requires]
 python_version = "3.7"

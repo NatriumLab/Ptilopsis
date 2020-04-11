@@ -1,5 +1,5 @@
 from mirai import (
-  Mirai, GroupMessage, Depend, FriendMessage
+  Mirai, GroupMessage, Depend, FriendMessage, MessageChain
 )
 from mirai.entities.builtins import ExecutorProtocol
 from mirai.event.builtins import InternalEvent
@@ -8,11 +8,16 @@ from typing import (
 )
 from mirai.logger import Session as SessionLogger
 from .command import CommandEntity
-from ptilopsis import string as btp
-from mirai.misc import printer
+from ptilopsis import (
+  string as btp,
+  objective as oit
+)
+from mirai.misc import printer, argument_signature
 import asyncio
 import re
 import functools
+import copy
+from typing import Union
 
 class Ptilopsis(object):
   """python-mirai 的指令系统支持库
@@ -41,7 +46,7 @@ class Ptilopsis(object):
   ):
     self.application = app
     self.listen_events = listen_events
-    self.command_prefix = ["^" + re.escape(i) for i in command_prefix]
+    self.command_prefix = [re.escape(i) for i in command_prefix]
 
     self.global_dependencies = global_dependencies
     self.global_middlewares = global_middlewares
@@ -71,16 +76,16 @@ class Ptilopsis(object):
       return func
     return warpper
 
-  async def GroupMessageListener(self, app: Mirai, message: GroupMessage):
+  def message_handler(self, message: Union[FriendMessage, GroupMessage]):
     "一句话只能触发一个指令."
-    message_string = message.toString()
-
-    prefix = None
-    prefix_result = None
+    after_prefix = None
     for prefix_pattern in self.command_prefix:
-      prefix_result = re.match(prefix_pattern, message_string)
-      if prefix_result:
-        prefix = prefix_pattern
+      after_prefix = \
+        oit.chain_regex_match_headpop(
+          copy.copy(message.messageChain),
+          prefix_pattern
+        )
+      if after_prefix:
         break
     else:
       return
@@ -88,87 +93,83 @@ class Ptilopsis(object):
     # 如果到了这里, 就说明这句话试图触发一个指令
     matched_command_entity = None
     matched_command_params = None
-
-    after_prefix = message_string[prefix_result.end():] # 提取出尝试执行的指令字符串
+    special_handle_for_raw_string = None
+    matched_result = None
     for command in self.commands:
       matched_command_entity = command
       for command_match in [command.match, *command.aliases]:
-        matched_command_params = command_match.parse(after_prefix)
-        if matched_command_params == {} or matched_command_params: # 匹配到了.
+        matched_info = oit.chain_match(command_match, 
+          MessageChain(__root__=after_prefix.__root__[1:])
+        )
+        if matched_info: # 匹配到了.
+          matched_result, special_handle_for_raw_string = matched_info
           break
       else: # 没匹配到
         return
+      
+    # 处理 matched_command_params
+    optional_params = {
+      param.name: param.default \
+        for param in \
+          argument_signature(matched_command_entity.execator)
+    }
+    return {
+      "command": matched_command_entity,
+      "parameters": {
+        **({
+          # 因为蜜汁原因, 导致我们还得判断一步...但这应该在外部执行(要获取 execator 的 default...)
+          # 多出来的这一步是因为 python-mirai 内部逻辑的缺点...我们必须克服它.
+          k: special_handle_for_raw_string(v) if isinstance(v, str) else 
+            (v if v != None else optional_params.get(k))
+          for k, v in matched_result.items()
+        })
+      }
+    }
 
-    if "GroupMessage" not in matched_command_entity.allow_events:
+  async def GroupMessageListener(self, app: Mirai, message: GroupMessage):
+    handle_result = self.message_handler(message)
+    if not handle_result:
       return
-    
-    # 因为我们需要传入同一个上下文, 这里我们复用 application 机制中的 executer 方法
-    # 传入 extra.
+    if "GroupMessage" not in handle_result['command'].allow_events:
+      return
 
     await app.executor(ExecutorProtocol(
-      callable=matched_command_entity.execator,
+      callable=handle_result['command'].execator,
       dependencies=[
-        *matched_command_entity.dependencies,
+        *handle_result['command'].dependencies,
         *self.global_dependencies,
         *app.global_dependencies
       ],
       middlewares=[
-        *matched_command_entity.middlewares,
+        *handle_result['command'].middlewares,
         *self.global_middlewares,
         *app.global_middlewares
       ]
     ), InternalEvent(
       name="GroupMessage",
       body=message
-    ), matched_command_params)
+    ), handle_result['parameters'])
 
   async def FriendMessageListener(self, app: Mirai, message: FriendMessage):
-    "一句话只能触发一个指令."
-    message_string = message.toString()
-
-    prefix = None
-    prefix_result = None
-    for prefix_pattern in self.command_prefix:
-      prefix_result = re.match(prefix_pattern, message_string)
-      if prefix_result:
-        prefix = prefix_pattern
-        break
-    else:
+    handle_result = self.message_handler(message)
+    if not handle_result:
       return
-    
-    # 如果到了这里, 就说明这句话试图触发一个指令
-    matched_command_entity = None
-    matched_command_params = None
-
-    after_prefix = message_string[prefix_result.end():] # 提取出尝试执行的指令字符串
-    for command in self.commands:
-      matched_command_entity = command
-      for command_match in [command.match, *command.aliases]:
-        matched_command_params = command_match.parse(after_prefix)
-        if matched_command_params: # 匹配到了.
-          break
-    else: # 没匹配到
+    if "FriendMessage" not in handle_result['command'].allow_events:
       return
-
-    if "FriendMessage" not in matched_command_entity.allow_events:
-      return
-    
-    # 因为我们需要传入同一个上下文, 这里我们复用 application 机制中的 executer 方法
-    # 传入 extra.
 
     await app.executor(ExecutorProtocol(
-      callable=matched_command_entity.execator,
+      callable=handle_result['command'].execator,
       dependencies=[
-        *matched_command_entity.dependencies,
+        *handle_result['command'].dependencies,
         *self.global_dependencies,
         *app.global_dependencies
       ],
       middlewares=[
-        *matched_command_entity.middlewares,
+        *handle_result['command'].middlewares,
         *self.global_middlewares,
         *app.global_middlewares
       ]
     ), InternalEvent(
       name="FriendMessage",
       body=message
-    ), matched_command_params)
+    ), handle_result['parameters'])

@@ -81,6 +81,23 @@ def chain_headpop(chain: MessageChain, pop_with: str) -> MessageChain:
         chain[0].text = chain[0].text[pop_with_length:]
         return chain
 
+def chain_regex_match_headpop(chain: MessageChain, pop_with_regex: str) -> MessageChain:
+  if not chain:
+    return
+  else:
+    if not chain.__root__:
+      return
+  
+  length = len(chain)
+  if length >= 2:
+    first_plain = chain.getFirstComponent(Plain)
+    if first_plain:
+      first_plain_index = chain.__root__.index(first_plain)
+      match_result = re.match(pop_with_regex, first_plain.text)
+      if match_result:
+        chain.__root__[first_plain_index] = Plain(first_plain.text[match_result.end():])
+        return chain
+
 def chain_startswith(chain: MessageChain, with_: str) -> bool:
   if not chain:
     return
@@ -122,10 +139,8 @@ def chain_match(signature: Signature, chain: MessageChain) -> Optional_Typing[di
   signature.check() # 防止NT行为.
 
   # 想了想, 还是用 regex 进行匹配, 但是这种方法及其脆弱, 我得想办法加强.
-  #closure_sign = random.choice("`:;'<?.=") # 内容将由这些字符中的一个替换.(我还在思考该如何避免用户直接输入这些字符然后触发错误)
-  closure_sign = "<"
-  #replace_sign = random.choice("%^&*(]")
-  replace_sign = "*"
+  closure_sign = random.choice("`:;'<?.=") # 内容将由这些字符中的一个替换.(我还在思考该如何避免用户直接输入这些字符然后触发错误)
+  replace_sign = random.choice("%&*(]-")
   special_dict = {}
   def special_save(value) -> str:
     key = "".join(random.choices(const_string.ascii_lowercase + const_string.digits, k=7))
@@ -159,7 +174,7 @@ def chain_match(signature: Signature, chain: MessageChain) -> Optional_Typing[di
 
   translated_string = "".join([
     # 先将原有的, 与 closure_sign 使用相同的字符附上转义, 然后把 closure_sign 转为 replace_sign.
-    # 返回来就要把之前转义的 closure_sign 的转义去除, 使其成为字面量一致.
+    # 返回来就要把之前转义的 closure_sign 的转义去除, 使其字面量一致.
     re.sub(
       f"(?!\\\\){closure_sign}", replace_sign,
       component.text\
@@ -171,18 +186,13 @@ def chain_match(signature: Signature, chain: MessageChain) -> Optional_Typing[di
     for component in chain
   ])
   matched_result = signature.parse(translated_string)
-  if matched_result:
-    return {
-      k: special_handle_for_raw_string(v)
-      for k, v in matched_result.items()
-    }
+  return (matched_result, special_handle_for_raw_string) if matched_result else None
 
 if __name__ == "__main__":
-  from mirai import At 
+  from mirai import At
   from devtools import debug
-  signature = Signature("匹配魔法!<magic>,向<target>发出!")
-  debug(signature_result_list_generate(signature_sorter("匹配魔法!<magic>,向<target>发出!")))
-  print("匹配魔法!rm<*-rf/<,向543".replace("<", "\\<"))
+  signature = Signature("匹配魔法!<magic:toString>,向<target:assert('1846913566' in ComponentSets('at'))>发出!")
+  debug(signature_result_list_generate(signature_sorter("匹配魔法!<magic:toString>,向<target:assert('1846913566' in ComponentSets('at'))>发出!")))
   chain = MessageChain(__root__=[
     Plain("匹配魔法!rm<*-rf/<,向543"), At(123), At(1846913566), Plain("发出!")
   ])

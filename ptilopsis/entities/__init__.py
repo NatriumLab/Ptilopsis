@@ -53,7 +53,7 @@ class Optional(CommandComponent):
         self.index = index
 
     def regex_generater(self):
-        return f"(?P<{self.name}>((?!\ ).)*)?"
+        return f"((?P<{self.name}>((?!\ ).)*)?)"
 
     def __repr__(self):
         return f"<Optional name='{self.name}' flags={self.flags}>"

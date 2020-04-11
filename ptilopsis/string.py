@@ -12,7 +12,7 @@ from .entities import (
 from collections import Counter
 from functools import lru_cache
 from typing import List
-from mirai.misc import raiser
+from mirai.misc import raiser, printer
 from .logger import CommandLogger
 
 # 这些规则都是互斥的, 并且是由转译层完成, 属于高级设定
@@ -102,7 +102,9 @@ def signature_parser(signature_string: str):
       if string == ">":
         # 退出了.
         stats = "normal"
-      if re.match(r"^[_a-zA-Z][a-zA-Z0-9_]*$", string):
+        continue
+      flag_match = re.match(r"^[^>,]*$", string)
+      if flag_match: # 尝试兼容一些非常有趣的功能
         flags.setdefault(require[-1], [])
         flags[require[-1]].append(index)
       else:
@@ -142,7 +144,8 @@ def signature_parser(signature_string: str):
       if string == "]":
         # 退出了.
         stats = "normal"
-      if re.match(r"^[_a-zA-Z][a-zA-Z0-9_]*$", string):
+        continue
+      if re.match(r"^[^>,]*$", string):
         flags.setdefault(optional[-1], [])
         flags[optional[-1]].append(index)
         # 这里stats不需要改变.
@@ -233,7 +236,7 @@ def signature_result_list_generate(in_result: dict):
           else:
             CommandLogger.warning(
               f"it seems that you are use '`' in a wrong place, \
-                it should be placed before an optional argument signature.: {result}")
+                it should be placed before an optional argument signature: {result}")
   return result
 
 def special_rule_regex_generate(in_result: List):
@@ -288,8 +291,9 @@ def parse(signature, string, extra_format={}, strict=False):
   final_regex = special_rule_regex_generate(regex_generater_list)
 
   regex_result = re.match(final_regex, string)
-  print(regex_result)
+  print(final_regex)
   if regex_result:
+    print(regex_result.groupdict())
     original: dict = {k: v for k, v in regex_result.groupdict().items() if v != ""}
     result = {}
     for name, value in original.items():
@@ -307,7 +311,11 @@ def parse(signature, string, extra_format={}, strict=False):
           result[name] = value
       else:
         result[name] = value
+    if result == {}:
+      return {i.name: None for i in regex_generater_list if isinstance(i, (Require, Optional))}
     return result
+  else:
+    return
 
 class Signature:
   signature: str
@@ -317,6 +325,12 @@ class Signature:
 
   def parse(self, target_string, extra_format={}, strict=False):
     return parse(self.signature, target_string, extra_format, strict)
+
+  def generate_list(self):
+    return signature_result_list_generate(signature_sorter(self.signature))
+
+  def generate_pattern(self):
+    return special_rule_regex_generate(self.generate_list())
 
   def check(self):
     elements = signature_result_list_generate(
